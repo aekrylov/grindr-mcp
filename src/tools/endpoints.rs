@@ -4,14 +4,21 @@
 //! location, grid browsing and profile viewing. The generic discovery/request
 //! tools live in [`super::generic`].
 
-use grindr::Method;
+use std::time::Duration;
+
+use grindr::{Method, WsCommand, WsConnectionState};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
 use rmcp::{schemars, tool, tool_router, ErrorData as McpError};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::time::timeout;
 
 use crate::{geohash, json_result, state, GrindrServer};
+
+/// How long to wait for the websocket to connect, and for a command ack.
+const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const WS_ACK_TIMEOUT: Duration = Duration::from_secs(12);
 
 // ─── Tool argument types ───────────────────────────────────────────────────────
 
@@ -121,6 +128,14 @@ struct GetProfileArgs {
     profile_id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SendMessageArgs {
+    /// Numeric profile id of the recipient, e.g. "877029791".
+    profile_id: String,
+    /// The text to send.
+    text: String,
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
 /// A Grindr conversation id is `<digits>:<digits>` (two profile ids). Validating
@@ -220,6 +235,90 @@ impl GrindrServer {
                 None,
             )
         })
+    }
+
+    /// Send a chat command over the realtime websocket and wait for the server's
+    /// ack (the event echoing our `ref`). Chat is websocket-only in practice —
+    /// the HTTP `/v4/chat/message/send` endpoint returns an internal error — so
+    /// this mirrors what the Android app and the `grindr.rs` reference client do.
+    async fn send_ws_command(&self, command_type: &str, payload: Value) -> Result<Value, McpError> {
+        if self.current_session().is_none() {
+            return Err(McpError::internal_error("not logged in", None));
+        }
+
+        // Open the websocket (idempotent) and wait until it's connected.
+        self.client.connect().await;
+        let mut state_rx = self.client.connection_state();
+        if *state_rx.borrow() != WsConnectionState::Connected {
+            let wait = async {
+                loop {
+                    if state_rx.changed().await.is_err() {
+                        return false;
+                    }
+                    if *state_rx.borrow() == WsConnectionState::Connected {
+                        return true;
+                    }
+                }
+            };
+            match timeout(WS_CONNECT_TIMEOUT, wait).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return Err(McpError::internal_error(
+                        "websocket closed before connecting",
+                        None,
+                    ))
+                }
+                Err(_) => {
+                    return Err(McpError::internal_error(
+                        "websocket did not connect within 15s",
+                        None,
+                    ))
+                }
+            }
+        }
+
+        // Subscribe before sending so we don't miss a fast ack.
+        let mut events = self.client.ws_receiver();
+        let ref_id = uuid::Uuid::new_v4().to_string();
+        let command = WsCommand {
+            r#type: command_type.to_owned(),
+            ref_id: ref_id.clone(),
+            payload,
+        };
+
+        self.client
+            .ws_sender()
+            .send(command)
+            .await
+            .map_err(|e| McpError::internal_error(format!("websocket send failed: {e}"), None))?;
+
+        // Wait for the event whose `ref` matches our command.
+        let wait_ack = async {
+            loop {
+                match events.recv().await {
+                    Ok(ev) => {
+                        if ev.payload.get("ref").and_then(|r| r.as_str()) == Some(ref_id.as_str()) {
+                            return Some(ev.payload);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return None,
+                }
+            }
+        };
+
+        match timeout(WS_ACK_TIMEOUT, wait_ack).await {
+            Ok(Some(payload)) => Ok(payload),
+            Ok(None) => Err(McpError::internal_error(
+                "websocket closed before the command was acked",
+                None,
+            )),
+            // No ack doesn't necessarily mean failure — surface that honestly.
+            Err(_) => Ok(json!({
+                "acked": false,
+                "note": "command dispatched but no ack within 12s; verify with grindr_get_messages",
+            })),
+        }
     }
 
     #[tool(
@@ -486,5 +585,43 @@ impl GrindrServer {
             }
             None => json_result(json!({ "status": resp.status, "body": body })),
         }
+    }
+
+    #[tool(description = "Send a text chat message to a user over the realtime \
+        websocket — the way the app does it. (The HTTP send endpoint returns an \
+        internal error; chat is websocket-only in practice.) Opens the websocket \
+        if needed and waits for the server ack. Be civil; do not use for spam.")]
+    async fn grindr_send_message(
+        &self,
+        Parameters(SendMessageArgs { profile_id, text }): Parameters<SendMessageArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if profile_id.is_empty() || !profile_id.bytes().all(|c| c.is_ascii_digit()) {
+            return Err(McpError::invalid_params(
+                format!("profile_id must be a numeric id, got {profile_id:?}"),
+                None,
+            ));
+        }
+        if text.is_empty() {
+            return Err(McpError::invalid_params("text must not be empty", None));
+        }
+        let target_id: i64 = profile_id
+            .parse()
+            .map_err(|_| McpError::invalid_params("profile_id is out of range", None))?;
+
+        // Payload mirrors the HTTP send body (type / target / body).
+        let payload = json!({
+            "type": "Text",
+            "target": { "type": "Direct", "targetId": target_id },
+            "body": { "text": text },
+        });
+        let ack = self
+            .send_ws_command("chat.v1.message.send", payload)
+            .await?;
+
+        json_result(json!({
+            "sent": true,
+            "recipient": profile_id,
+            "ack": ack,
+        }))
     }
 }

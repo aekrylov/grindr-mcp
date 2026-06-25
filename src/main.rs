@@ -120,7 +120,10 @@ impl ServerHandler for GrindrServer {
             grindr_describe_endpoint.\n\
             3. Call grindr_request(method, path, body?) to hit any endpoint, or use \
             a convenience tool (grindr_browse_grid, grindr_get_profile, \
-            grindr_list_conversations, grindr_get_messages, grindr_update_location).\n\n\
+            grindr_list_conversations, grindr_get_messages, grindr_send_message, \
+            grindr_update_location).\n\n\
+            Note: chat is sent over the websocket (grindr_send_message); the HTTP \
+            chat-send endpoint does not work.\n\n\
             For educational purposes only; unofficial and not affiliated with \
             Grindr.\n\n\
             Bundled spec: {}",
