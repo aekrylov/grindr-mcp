@@ -130,11 +130,18 @@ refreshed before it expires and once reactively on a `401`.
 
 ## Layout
 
-- `src/main.rs` — MCP server and tool definitions.
+- `src/main.rs` — server struct, shared request helpers, `ServerHandler` and entrypoint.
+- `src/tools/generic.rs` — generic discovery / request tools (`grindr_request`, `grindr_list_endpoints`, `grindr_describe_endpoint`, `grindr_list_tags`).
+- `src/tools/endpoints.rs` — endpoint-specific tools (auth, conversations, messages, location, grid, profile).
 - `src/openapi.rs` — discovery helpers over the bundled spec.
-- `src/state.rs` — on-disk device + session persistence.
+- `src/geohash.rs` — geohash encoding for location tools.
+- `src/state.rs` — on-disk device + session + pinned-location persistence.
 - `openapi.json` — Grindr OpenAPI spec (from <https://opengrind.org/openapi.json>).
-- `grindr.rs/` — the upstream Grindr transport crate (path dependency).
+
+The two tool groups are separate `#[tool_router]` blocks (`generic_router` and
+`endpoint_router`) merged in `GrindrServer::new`. The transport crate
+[`grindr.rs`](https://git.opengrind.org/open-grind/grindr.rs) is a pinned git
+dependency.
 
 ## Credits
 
