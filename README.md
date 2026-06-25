@@ -25,12 +25,19 @@ Cloudflare. The API surface comes from the
 | `grindr_logout` | Clear the session and remove it from disk. |
 | `grindr_session_status` | Whether a session is active, plus device summary. |
 | `grindr_request` | Make an authenticated request to any endpoint (`method`, `path`, optional JSON `body`). Returns status + body. |
+| `grindr_list_conversations` | List inbox conversations (most recent first), with `unread_only` / `favorites_only` / `online_now_only` / `right_now_only` filters and `page`. |
+| `grindr_get_messages` | Fetch the messages in a conversation (`conversation_id`, optional `page_key` for older messages). Does not mark as read. |
 | `grindr_list_endpoints` | List endpoints from the OpenAPI spec, filter by `tag` and/or `search`. |
 | `grindr_describe_endpoint` | Full details for a path: parameters, request/response schemas (with `$ref`s inlined). |
 | `grindr_list_tags` | List API tags (categories) for use as the `tag` filter. |
 
-Typical flow: `grindr_login` → `grindr_list_tags` / `grindr_list_endpoints` →
-`grindr_describe_endpoint` → `grindr_request`.
+`grindr_list_conversations` and `grindr_get_messages` are convenience wrappers
+over the messaging endpoints; anything else is reachable through the generic
+`grindr_request`.
+
+Typical flow: `grindr_login` → `grindr_list_conversations` →
+`grindr_get_messages`, or `grindr_list_tags` / `grindr_list_endpoints` →
+`grindr_describe_endpoint` → `grindr_request` for everything else.
 
 ## Build
 

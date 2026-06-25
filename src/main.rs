@@ -73,6 +73,42 @@ struct DescribeEndpointArgs {
     method: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListConversationsArgs {
+    /// 1-based page number for pagination. Defaults to 1. Use the `nextPage`
+    /// from a previous response to page forward.
+    #[serde(default)]
+    page: Option<u32>,
+    /// Only return conversations with unread messages.
+    #[serde(default)]
+    unread_only: Option<bool>,
+    /// Only return conversations with favorited profiles.
+    #[serde(default)]
+    favorites_only: Option<bool>,
+    /// Only return conversations whose participant is online now.
+    #[serde(default)]
+    online_now_only: Option<bool>,
+    /// Only return conversations whose participant is "Right Now" active.
+    #[serde(default)]
+    right_now_only: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct GetMessagesArgs {
+    /// Conversation id: two profile ids joined by ':' (smaller id first), e.g.
+    /// "12345678:23456789". Get these from a conversation listing (POST
+    /// /v3/inbox or /v4/inbox).
+    conversation_id: String,
+    /// Optional pagination cursor: return messages with ids *before* this value
+    /// (i.e. older messages). Use the `pageKey` from a previous response to page
+    /// back through history.
+    #[serde(default)]
+    page_key: Option<String>,
+    /// Optional: include the other participant's profile in the response.
+    #[serde(default)]
+    include_profile: Option<bool>,
+}
+
 // ─── Server ────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -92,6 +128,35 @@ fn json_result(value: Value) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
+/// A Grindr conversation id is `<digits>:<digits>` (two profile ids). Validating
+/// it keeps caller mistakes from being pasted straight into the request path.
+fn is_valid_conversation_id(id: &str) -> bool {
+    match id.split_once(':') {
+        Some((a, b)) => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.bytes().all(|c| c.is_ascii_digit())
+                && b.bytes().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+/// Percent-encode a query-parameter value (RFC 3986 unreserved chars pass
+/// through; everything else is `%XX`). Avoids pulling in a urlencoding crate.
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for &b in value.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[tool_router]
 impl GrindrServer {
     fn new(client: Arc<GrindrClient>, device: DeviceInfo, state_path: PathBuf) -> Self {
@@ -106,6 +171,32 @@ impl GrindrServer {
     /// Read the current session out of the client's session watch channel.
     fn current_session(&self) -> Option<Session> {
         self.client.session_receiver().borrow().clone()
+    }
+
+    /// Make an authenticated request and render it as a `{status, body}` result,
+    /// surfacing the body as JSON when it parses and as text otherwise. Shared by
+    /// `grindr_request` and the higher-level endpoint tools.
+    async fn authenticated_request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<CallToolResult, McpError> {
+        let resp = self
+            .client
+            .request_authenticated_raw(method, path, body)
+            .await
+            .map_err(|e| McpError::internal_error(format!("request failed: {e}"), None))?;
+
+        let body_value = match serde_json::from_slice::<Value>(&resp.body) {
+            Ok(v) => v,
+            Err(_) => Value::String(String::from_utf8_lossy(&resp.body).into_owned()),
+        };
+
+        json_result(json!({
+            "status": resp.status,
+            "body": body_value,
+        }))
     }
 
     #[tool(
@@ -176,23 +267,83 @@ impl GrindrServer {
     ) -> Result<CallToolResult, McpError> {
         let method = Method::from_bytes(method.to_uppercase().as_bytes())
             .map_err(|e| McpError::invalid_params(format!("invalid HTTP method: {e}"), None))?;
+        self.authenticated_request(method, &path, body).await
+    }
 
-        let resp = self
-            .client
-            .request_authenticated_raw(method, &path, body)
-            .await
-            .map_err(|e| McpError::internal_error(format!("request failed: {e}"), None))?;
+    #[tool(
+        description = "List the inbox conversations (most recent first), with \
+        optional filters and pagination. Each entry includes the conversationId, \
+        the other participant, unreadCount and a preview of the last message. Pass \
+        unread_only=true to get just unread threads. Returns the raw status and \
+        body (entries + a nextPage cursor)."
+    )]
+    async fn grindr_list_conversations(
+        &self,
+        Parameters(ListConversationsArgs {
+            page,
+            unread_only,
+            favorites_only,
+            online_now_only,
+            right_now_only,
+        }): Parameters<ListConversationsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // The endpoint requires all of these fields to be present.
+        let body = json!({
+            "unreadOnly": unread_only.unwrap_or(false),
+            "favoritesOnly": favorites_only.unwrap_or(false),
+            "onlineNowOnly": online_now_only.unwrap_or(false),
+            "rightNowOnly": right_now_only.unwrap_or(false),
+            "chemistryOnly": false,
+            "distanceMeters": Value::Null,
+            "positions": [],
+        });
+        let path = format!("/v4/inbox?page={}", page.unwrap_or(1));
+        self.authenticated_request(Method::POST, &path, Some(body)).await
+    }
 
-        // Prefer to surface the body as structured JSON; fall back to text.
-        let body_value = match serde_json::from_slice::<Value>(&resp.body) {
-            Ok(v) => v,
-            Err(_) => Value::String(String::from_utf8_lossy(&resp.body).into_owned()),
-        };
+    #[tool(
+        description = "Fetch the messages in a conversation (newest page first), \
+        with optional pagination to older messages. Reading messages does NOT mark \
+        them as read. Returns the raw status and body (messages, the other \
+        participant, and a pageKey cursor for older messages)."
+    )]
+    async fn grindr_get_messages(
+        &self,
+        Parameters(GetMessagesArgs {
+            conversation_id,
+            page_key,
+            include_profile,
+        }): Parameters<GetMessagesArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if !is_valid_conversation_id(&conversation_id) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "conversation_id must be two numeric profile ids joined by ':' \
+                     (e.g. \"12345678:23456789\"), got {conversation_id:?}"
+                ),
+                None,
+            ));
+        }
 
-        json_result(json!({
-            "status": resp.status,
-            "body": body_value,
-        }))
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(key) = &page_key {
+            query.push(("pageKey", key.clone()));
+        }
+        if include_profile.unwrap_or(false) {
+            query.push(("profile", "true".to_owned()));
+        }
+
+        let mut path = format!("/v5/chat/conversation/{conversation_id}/message");
+        if !query.is_empty() {
+            let qs: Vec<String> = query
+                .iter()
+                .map(|(k, v)| format!("{k}={}", percent_encode(v)))
+                .collect();
+            path.push('?');
+            path.push_str(&qs.join("&"));
+        }
+
+        self.authenticated_request(Method::GET, &path, None).await
     }
 
     #[tool(
