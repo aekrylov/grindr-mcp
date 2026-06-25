@@ -73,6 +73,32 @@ pub fn save(path: &Path, device: &DeviceInfo, session: Option<&Session>) -> Resu
     Ok(())
 }
 
+/// Path of the "pinned" browsing geohash, stored next to the state file. This is
+/// the last location set via `grindr_update_location`, reused by the grid tool
+/// when the caller doesn't pass an explicit location.
+fn pinned_geohash_path(state_path: &Path) -> PathBuf {
+    state_path.with_file_name("pinned_geohash")
+}
+
+/// Read the pinned geohash, if one has been set.
+pub fn load_pinned_geohash(state_path: &Path) -> Option<String> {
+    std::fs::read_to_string(pinned_geohash_path(state_path))
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Persist the pinned geohash.
+pub fn save_pinned_geohash(state_path: &Path, geohash: &str) -> Result<()> {
+    let path = pinned_geohash_path(state_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating state dir {}", parent.display()))?;
+    }
+    std::fs::write(&path, geohash).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn set_owner_only(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
