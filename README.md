@@ -1,0 +1,106 @@
+# grindr-mcp
+
+A [Model Context Protocol](https://modelcontextprotocol.io) server for the
+**unofficial** Grindr API. It lets an MCP client (Claude Code, Claude Desktop,
+etc.) log in to Grindr and call any endpoint, with API discovery built in from a
+bundled OpenAPI spec.
+
+It is built on [`grindr.rs`](https://git.opengrind.org/open-grind/grindr.rs),
+which talks to Grindr the same way the Android app does — same TLS/HTTP2
+fingerprint, header order and device identity — so requests get past
+Cloudflare. The API surface comes from the
+[Open Grind](https://opengrind.org) project's OpenAPI document.
+
+> ⚠️ **For educational purposes only.** This project is provided solely for
+> education and research into API interoperability. It is **unofficial** and not
+> affiliated with, authorized, or endorsed by Grindr. Automating access may
+> violate Grindr's Terms of Service. Use it only with your own account and at
+> your own risk — you are solely responsible for how you use it.
+
+## Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `grindr_login` | Log in with email + password. Session is persisted and auto-refreshed. |
+| `grindr_logout` | Clear the session and remove it from disk. |
+| `grindr_session_status` | Whether a session is active, plus device summary. |
+| `grindr_request` | Make an authenticated request to any endpoint (`method`, `path`, optional JSON `body`). Returns status + body. |
+| `grindr_list_endpoints` | List endpoints from the OpenAPI spec, filter by `tag` and/or `search`. |
+| `grindr_describe_endpoint` | Full details for a path: parameters, request/response schemas (with `$ref`s inlined). |
+| `grindr_list_tags` | List API tags (categories) for use as the `tag` filter. |
+
+Typical flow: `grindr_login` → `grindr_list_tags` / `grindr_list_endpoints` →
+`grindr_describe_endpoint` → `grindr_request`.
+
+## Build
+
+Requires Rust and CMake (the latter for the BoringSSL used by the TLS
+fingerprint).
+
+```sh
+brew install rust cmake     # if you don't have them
+cargo build --release       # binary at target/release/grindr-mcp
+```
+
+## Configure
+
+The server speaks MCP over **stdio**. Point your client at the built binary.
+
+### Claude Code
+
+```sh
+claude mcp add grindr -- /Users/anth/prog/grindr-mcp/target/release/grindr-mcp
+```
+
+### Claude Desktop / generic `mcpServers` config
+
+```json
+{
+  "mcpServers": {
+    "grindr": {
+      "command": "/Users/anth/prog/grindr-mcp/target/release/grindr-mcp"
+    }
+  }
+}
+```
+
+Then ask the client to log in (it will call `grindr_login` with your
+credentials), or pre-seed a session in the state file.
+
+## State & secrets
+
+The device identity and session are stored at:
+
+- `$GRINDR_MCP_STATE` if set, otherwise
+- `<config dir>/grindr-mcp/state.json` (on macOS:
+  `~/Library/Application Support/grindr-mcp/state.json`).
+
+The file is written `0600`. It contains bearer tokens — treat it as a secret.
+Keeping the same device across runs is less likely to trip Cloudflare, so the
+generated `DeviceInfo` is reused once created.
+
+## How requests work
+
+`grindr_request` maps directly onto the endpoints in the bundled
+`openapi.json`. For example:
+
+- `GET /v3/me/profile` — your own profile
+- `GET /v4/cascade` — the browse grid
+- `GET /v5/rightnow/feed` — Right Now feed
+
+The session token (`Authorization: Grindr3 <jwt>`), device headers and the
+okhttp TLS/HTTP2 fingerprint are all applied automatically; the token is
+refreshed before it expires and once reactively on a `401`.
+
+## Layout
+
+- `src/main.rs` — MCP server and tool definitions.
+- `src/openapi.rs` — discovery helpers over the bundled spec.
+- `src/state.rs` — on-disk device + session persistence.
+- `openapi.json` — Grindr OpenAPI spec (from <https://opengrind.org/openapi.json>).
+- `grindr.rs/` — the upstream Grindr transport crate (path dependency).
+
+## Credits
+
+- [`grindr.rs`](https://git.opengrind.org/open-grind/grindr.rs) — the transport.
+- [Open Grind](https://opengrind.org) — the API reference and OpenAPI spec.

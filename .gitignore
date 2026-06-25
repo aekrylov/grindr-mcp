@@ -1,0 +1,8 @@
+/target
+*.tmp
+state.json
+
+# Local clones used only for research / as a path dependency fallback.
+# The build uses a pinned git dependency, so these are not committed.
+/grindr.rs
+/grindr-api-dev-tool
