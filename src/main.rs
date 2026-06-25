@@ -21,13 +21,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use grindr::{DeviceInfo, GrindrClient, Method, Session};
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
+use rmcp::transport::stdio;
 use rmcp::{
     schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler, ServiceExt,
 };
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::transport::stdio;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -298,7 +298,8 @@ impl GrindrServer {
             "positions": [],
         });
         let path = format!("/v4/inbox?page={}", page.unwrap_or(1));
-        self.authenticated_request(Method::POST, &path, Some(body)).await
+        self.authenticated_request(Method::POST, &path, Some(body))
+            .await
     }
 
     #[tool(
@@ -407,13 +408,9 @@ impl ServerHandler for GrindrServer {
             Bundled spec: {}",
             info
         );
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_server_info(Implementation::from_build_env())
-        .with_instructions(instructions)
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::from_build_env())
+            .with_instructions(instructions)
     }
 }
 

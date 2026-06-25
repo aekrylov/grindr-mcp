@@ -39,10 +39,31 @@ Typical flow: `grindr_login` → `grindr_list_conversations` →
 `grindr_get_messages`, or `grindr_list_tags` / `grindr_list_endpoints` →
 `grindr_describe_endpoint` → `grindr_request` for everything else.
 
-## Build
+## Install (prebuilt binary — no Rust toolchain needed)
 
-Requires Rust and CMake (the latter for the BoringSSL used by the TLS
-fingerprint).
+Each tagged release publishes standalone binaries built by GitHub Actions, so
+you don't need Rust or CMake to run the server. Grab the archive for your
+platform from the [Releases page](https://github.com/aekrylov/grindr-mcp/releases):
+
+| Platform | Asset |
+| --- | --- |
+| macOS, Apple Silicon | `grindr-mcp-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `grindr-mcp-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `grindr-mcp-x86_64-unknown-linux-gnu.tar.gz` |
+
+```sh
+# Example: macOS Apple Silicon
+tar -xzf grindr-mcp-aarch64-apple-darwin.tar.gz
+sudo mv grindr-mcp-aarch64-apple-darwin/grindr-mcp /usr/local/bin/
+xattr -d com.apple.quarantine /usr/local/bin/grindr-mcp 2>/dev/null || true  # macOS Gatekeeper
+```
+
+Each archive has a matching `.sha256` you can verify with `shasum -a 256 -c`.
+
+## Build from source
+
+Only needed if you want to build it yourself. Requires Rust and CMake (the
+latter for the BoringSSL used by the TLS fingerprint).
 
 ```sh
 brew install rust cmake     # if you don't have them

@@ -1,0 +1,73 @@
+name: release
+
+# Builds standalone grindr-mcp binaries so the server can be used without a Rust
+# toolchain. Pushing a tag like `v0.1.0` creates a GitHub Release with the
+# binaries attached; a manual run just uploads them as workflow artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      # BoringSSL (via wreq) needs CMake + a C/C++ toolchain. macOS runners
+      # already have CMake; install it explicitly on Linux.
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="grindr-mcp-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/grindr-mcp" "$dist/"
+          cp README.md LICENSE "$dist/"
+          tar -czf "$dist.tar.gz" "$dist"
+          shasum -a 256 "$dist.tar.gz" | tee "$dist.tar.gz.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grindr-mcp-${{ matrix.target }}
+          path: |
+            grindr-mcp-${{ matrix.target }}.tar.gz
+            grindr-mcp-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            grindr-mcp-${{ matrix.target }}.tar.gz
+            grindr-mcp-${{ matrix.target }}.tar.gz.sha256

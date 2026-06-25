@@ -22,7 +22,11 @@ pub fn api_info() -> Value {
     let servers = SPEC
         .get("servers")
         .and_then(|s| s.as_array())
-        .map(|a| a.iter().filter_map(|s| s.get("url").cloned()).collect::<Vec<_>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.get("url").cloned())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     json!({ "info": info, "servers": servers })
 }
@@ -39,7 +43,9 @@ pub fn list_endpoints(tag: Option<&str>, search: Option<&str>) -> Vec<Value> {
     };
 
     for (path, item) in paths {
-        let Some(item) = item.as_object() else { continue };
+        let Some(item) = item.as_object() else {
+            continue;
+        };
         for &method in HTTP_METHODS {
             let Some(op) = item.get(method) else { continue };
 
