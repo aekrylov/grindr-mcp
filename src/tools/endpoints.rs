@@ -237,45 +237,47 @@ impl GrindrServer {
         })
     }
 
+    /// Open the realtime websocket (idempotent) and wait until it's connected.
+    /// While the connection is held, the account shows as online — this is the
+    /// only way Grindr exposes presence (there is no REST "set online" endpoint).
+    async fn ensure_ws_connected(&self) -> Result<(), McpError> {
+        if self.current_session().is_none() {
+            return Err(McpError::internal_error("not logged in", None));
+        }
+        self.client.connect().await;
+        let mut state_rx = self.client.connection_state();
+        if *state_rx.borrow() == WsConnectionState::Connected {
+            return Ok(());
+        }
+        let wait = async {
+            loop {
+                if state_rx.changed().await.is_err() {
+                    return false;
+                }
+                if *state_rx.borrow() == WsConnectionState::Connected {
+                    return true;
+                }
+            }
+        };
+        match timeout(WS_CONNECT_TIMEOUT, wait).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(McpError::internal_error(
+                "websocket closed before connecting",
+                None,
+            )),
+            Err(_) => Err(McpError::internal_error(
+                "websocket did not connect within 15s",
+                None,
+            )),
+        }
+    }
+
     /// Send a chat command over the realtime websocket and wait for the server's
     /// ack (the event echoing our `ref`). Chat is websocket-only in practice —
     /// the HTTP `/v4/chat/message/send` endpoint returns an internal error — so
     /// this mirrors what the Android app and the `grindr.rs` reference client do.
     async fn send_ws_command(&self, command_type: &str, payload: Value) -> Result<Value, McpError> {
-        if self.current_session().is_none() {
-            return Err(McpError::internal_error("not logged in", None));
-        }
-
-        // Open the websocket (idempotent) and wait until it's connected.
-        self.client.connect().await;
-        let mut state_rx = self.client.connection_state();
-        if *state_rx.borrow() != WsConnectionState::Connected {
-            let wait = async {
-                loop {
-                    if state_rx.changed().await.is_err() {
-                        return false;
-                    }
-                    if *state_rx.borrow() == WsConnectionState::Connected {
-                        return true;
-                    }
-                }
-            };
-            match timeout(WS_CONNECT_TIMEOUT, wait).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    return Err(McpError::internal_error(
-                        "websocket closed before connecting",
-                        None,
-                    ))
-                }
-                Err(_) => {
-                    return Err(McpError::internal_error(
-                        "websocket did not connect within 15s",
-                        None,
-                    ))
-                }
-            }
-        }
+        self.ensure_ws_connected().await?;
 
         // Subscribe before sending so we don't miss a fast ack.
         let mut events = self.client.ws_receiver();
@@ -347,6 +349,21 @@ impl GrindrServer {
     async fn grindr_logout(&self) -> Result<CallToolResult, McpError> {
         self.client.logout().await;
         json_result(json!({ "logged_in": false }))
+    }
+
+    #[tool(
+        description = "Go online: open and hold the realtime websocket so the \
+        account shows as online to others (Grindr has no REST 'set online' \
+        endpoint — presence is the live socket). The connection is kept by the \
+        server process; you stay online until it disconnects or you log out. \
+        Also delivers incoming events (messages, taps) while connected."
+    )]
+    async fn grindr_set_online(&self) -> Result<CallToolResult, McpError> {
+        self.ensure_ws_connected().await?;
+        json_result(json!({
+            "online": true,
+            "note": "websocket connected; you appear online while this server stays running",
+        }))
     }
 
     #[tool(

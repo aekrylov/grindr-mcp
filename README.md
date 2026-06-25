@@ -31,6 +31,7 @@ Cloudflare. The API surface comes from the
 | `grindr_list_conversations` | List inbox conversations (most recent first), with `unread_only` / `favorites_only` / `online_now_only` / `right_now_only` filters and `page`. |
 | `grindr_get_messages` | Fetch the messages in a conversation (`conversation_id`, optional `page_key` for older messages). Does not mark as read. |
 | `grindr_send_message` | Send a text message to a user (`profile_id`, `text`) over the realtime **websocket** — chat is websocket-only in practice; the HTTP send endpoint returns an internal error. |
+| `grindr_set_online` | Open and hold the realtime websocket so the account shows as **online** (Grindr has no REST presence endpoint; online = a live socket). Stays online while the server process runs. |
 | `grindr_list_endpoints` | List endpoints from the OpenAPI spec, filter by `tag` and/or `search`. |
 | `grindr_describe_endpoint` | Full details for a path: parameters, request/response schemas (with `$ref`s inlined). |
 | `grindr_list_tags` | List API tags (categories) for use as the `tag` filter. |
